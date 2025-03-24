@@ -1,17 +1,16 @@
 {
   "name": "chatbot-2-backend",
   "version": "1.0.0",
-  "description": "Backend for chatbot application",
-  "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^10.0.0",
     "express": "^4.17.1",
-    "firebase-admin": "^9.9.0",
+    "firebase-admin": "^9.4.2",
+    "dotenv": "^8.2.0",
+    "uuid": "^8.3.2",
     "openai": "^0.1.0",
-    "uuid": "^8.3.2"
+    "cors": "^2.8.5"
   }
 }
