@@ -15,7 +15,7 @@ const db = admin.firestore();
 
 const app = express();
 
-app.use(cors({ origin: "https://vercel.com/pukujans-projects/chatbot-2-frontend" })); 
+app.use(cors({ origin: "https://chatbot-2-frontend.vercel.app" }));
 app.use(express.json());
 
 // Initialize OpenRouter (Using OpenAI SDK)
