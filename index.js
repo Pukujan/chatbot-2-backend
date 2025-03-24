@@ -3,15 +3,19 @@ const express = require("express");
 const admin = require("firebase-admin");
 const { v4: uuidv4 } = require("uuid");
 const OpenAI = require("openai");
+const cors = require("cors");
 
 // Initialize Firebase Admin SDK
-const serviceAccount = require(process.env.FIREBASE_CREDENTIALS);
+const serviceAccount = require("./serviceAccountKey.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
 const db = admin.firestore();
+
 const app = express();
+
+app.use(cors({ origin: "http://localhost:5173" })); 
 app.use(express.json());
 
 // Initialize OpenRouter (Using OpenAI SDK)
@@ -24,8 +28,14 @@ const openai = new OpenAI({
 app.post("/chat", async (req, res) => {
   try {
     const chatId = uuidv4();
-    await db.collection("chats").doc(chatId).set({ createdAt: admin.firestore.Timestamp.now() });
-    res.status(201).json({ chatId, message: "Chat created successfully" });
+    const chatData = {
+      chatId, // Including chatId in document for easier access
+      chatName: "New Chat", // Default chat name
+      createdAt: admin.firestore.Timestamp.now()
+    };
+    
+    await db.collection("chats").doc(chatId).set(chatData);
+    res.status(201).json(chatData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -87,12 +97,52 @@ app.get("/chat/:chatId", async (req, res) => {
   }
 });
 
-// Get all chat IDs
+// Get all chat IDs and names
 app.get("/chats", async (req, res) => {
   try {
     const chatsSnapshot = await db.collection("chats").get();
-    const chatIds = chatsSnapshot.docs.map(doc => doc.id);
-    res.status(200).json({ chatIds });
+    const chats = chatsSnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        chatId: doc.id,
+        chatName: data.chatName || "New Chat" // Fallback to "New Chat" if name doesn't exist
+      };
+    });
+    res.status(200).json({ chats });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update chat name
+app.put("/chat/:chatId/name", async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { chatName } = req.body;
+    
+    if (!chatName || typeof chatName !== 'string') {
+      return res.status(400).json({ error: "Invalid chat name" });
+    }
+
+    await db.collection("chats").doc(chatId).update({ chatName });
+    res.status(200).json({ message: "Chat name updated successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// edit Chat Name
+app.put('/chat/:chatId/name', async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { chatName } = req.body;
+    
+    if (!chatName || typeof chatName !== 'string') {
+      return res.status(400).json({ error: "Invalid chat name" });
+    }
+
+    await db.collection("chats").doc(chatId).update({ chatName });
+    res.status(200).json({ message: "Chat name updated successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
