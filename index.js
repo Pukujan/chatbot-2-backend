@@ -4,6 +4,7 @@ const admin = require("firebase-admin");
 const { v4: uuidv4 } = require("uuid");
 const OpenAI = require("openai");
 const cors = require("cors");
+const authenticate = require("./middleware/auth"); // New auth middleware
 
 // Initialize Firebase Admin SDK
 const serviceAccount = require("./serviceAccountKey.json");
@@ -15,25 +16,33 @@ const db = admin.firestore();
 
 const app = express();
 
-app.use(cors({ origin: "https://chatbot-2-frontend.vercel.app" }));
+app.use(cors({
+  origin: "http://localhost:5173",
+  credentials: true
+}));
 app.use(express.json());
 
-// Initialize OpenRouter (Using OpenAI SDK)
+// Initialize OpenRouter
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY, // Store your API key in .env
+  apiKey: process.env.OPENROUTER_API_KEY,
 });
+
+// Apply authentication middleware to all chat routes
+app.use("/chat*", authenticate);
 
 // Create a new chat
 app.post("/chat", async (req, res) => {
   try {
+    const { uid } = req.user; // From auth middleware
     const chatId = uuidv4();
     const chatData = {
-      chatId, // Including chatId in document for easier access
-      chatName: "New Chat", // Default chat name
-      createdAt: admin.firestore.Timestamp.now()
+      chatId,
+      chatName: "New Chat",
+      createdAt: admin.firestore.Timestamp.now(),
+      userId: uid // Store user ID with chat
     };
-    
+
     await db.collection("chats").doc(chatId).set(chatData);
     res.status(201).json(chatData);
   } catch (error) {
@@ -44,27 +53,32 @@ app.post("/chat", async (req, res) => {
 // Send a message and get AI response
 app.post("/chat/:chatId/message", async (req, res) => {
   try {
+    console.log("post chat");
     const { chatId } = req.params;
+    const { uid } = req.user;
     const { sender, message } = req.body;
     const timestamp = admin.firestore.Timestamp.now();
+
+    // Verify user owns the chat
+    const chatDoc = await db.collection("chats").doc(chatId).get();
+    if (!chatDoc.exists || chatDoc.data().userId !== uid) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
 
     // Store user message
     await db.collection("chats").doc(chatId).collection("messages").add({
       sender,
       message,
       timestamp,
+      userId: uid // Track which user sent the message
     });
 
-    // Send message to OpenRouter AI
+    // Get AI response
     const aiResponse = await openai.chat.completions.create({
       model: "rekaai/reka-flash-3:free",
       messages: [{ role: "user", content: message }],
     });
 
-    // Debugging: Log the full response
-    console.log("AI Response:", aiResponse);
-
-    // Check if choices exist
     if (!aiResponse.choices || aiResponse.choices.length === 0) {
       throw new Error("Invalid response from OpenRouter API");
     }
@@ -76,6 +90,7 @@ app.post("/chat/:chatId/message", async (req, res) => {
       sender: "AI",
       message: botReply,
       timestamp: admin.firestore.Timestamp.now(),
+      userId: uid
     });
 
     res.status(201).json({ message: botReply });
@@ -89,7 +104,20 @@ app.post("/chat/:chatId/message", async (req, res) => {
 app.get("/chat/:chatId", async (req, res) => {
   try {
     const { chatId } = req.params;
-    const messagesSnapshot = await db.collection("chats").doc(chatId).collection("messages").orderBy("timestamp").get();
+    const { uid } = req.user;
+
+    // Verify user owns the chat
+    const chatDoc = await db.collection("chats").doc(chatId).get();
+    if (!chatDoc.exists || chatDoc.data().userId !== uid) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const messagesSnapshot = await db.collection("chats")
+      .doc(chatId)
+      .collection("messages")
+      .orderBy("timestamp")
+      .get();
+
     const messages = messagesSnapshot.docs.map(doc => doc.data());
     res.status(200).json({ messages });
   } catch (error) {
@@ -97,17 +125,20 @@ app.get("/chat/:chatId", async (req, res) => {
   }
 });
 
-// Get all chat IDs and names
+// Get all chats for current user
 app.get("/chats", async (req, res) => {
   try {
-    const chatsSnapshot = await db.collection("chats").get();
-    const chats = chatsSnapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        chatId: doc.id,
-        chatName: data.chatName || "New Chat" // Fallback to "New Chat" if name doesn't exist
-      };
-    });
+    const { uid } = req.user;
+
+    const chatsSnapshot = await db.collection("chats")
+      .where("userId", "==", uid)
+      .get();
+
+    const chats = chatsSnapshot.docs.map(doc => ({
+      chatId: doc.id,
+      chatName: doc.data().chatName || "New Chat"
+    }));
+
     res.status(200).json({ chats });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -118,27 +149,17 @@ app.get("/chats", async (req, res) => {
 app.put("/chat/:chatId/name", async (req, res) => {
   try {
     const { chatId } = req.params;
+    const { uid } = req.user;
     const { chatName } = req.body;
-    
+
     if (!chatName || typeof chatName !== 'string') {
       return res.status(400).json({ error: "Invalid chat name" });
     }
 
-    await db.collection("chats").doc(chatId).update({ chatName });
-    res.status(200).json({ message: "Chat name updated successfully" });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// edit Chat Name
-app.put('/chat/:chatId/name', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const { chatName } = req.body;
-    
-    if (!chatName || typeof chatName !== 'string') {
-      return res.status(400).json({ error: "Invalid chat name" });
+    // Verify user owns the chat
+    const chatDoc = await db.collection("chats").doc(chatId).get();
+    if (!chatDoc.exists || chatDoc.data().userId !== uid) {
+      return res.status(403).json({ error: "Unauthorized" });
     }
 
     await db.collection("chats").doc(chatId).update({ chatName });
@@ -152,10 +173,17 @@ app.put('/chat/:chatId/name', async (req, res) => {
 app.delete("/chat/:chatId", async (req, res) => {
   try {
     const { chatId } = req.params;
+    const { uid } = req.user;
+
+    // Verify user owns the chat
+    const chatDoc = await db.collection("chats").doc(chatId).get();
+    if (!chatDoc.exists || chatDoc.data().userId !== uid) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    // Delete all messages
     const messagesRef = db.collection("chats").doc(chatId).collection("messages");
     const messagesSnapshot = await messagesRef.get();
-
-    // Delete all messages first
     const batch = db.batch();
     messagesSnapshot.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
